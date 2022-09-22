@@ -5,9 +5,11 @@ use generic_array::{ArrayLength, GenericArray};
 /// Custom pointer type which contains one immutable (input) and one mutable
 /// (output) pointer, which are either equal or non-overlapping.
 pub struct InOut<'inp, 'out, T> {
-    pub(crate) in_ptr: *const T,
-    pub(crate) out_ptr: *mut T,
-    pub(crate) _pd: PhantomData<(&'inp T, &'out mut T)>,
+    // Invariant: The invariants required by the `from_raw` constructor must
+    // always hold.
+    in_ptr: *const T,
+    out_ptr: *mut T,
+    _pd: PhantomData<(&'inp T, &'out mut T)>,
 }
 
 impl<'inp, 'out, T> InOut<'inp, 'out, T> {
@@ -24,12 +26,15 @@ impl<'inp, 'out, T> InOut<'inp, 'out, T> {
     /// Get immutable reference to the input value.
     #[inline(always)]
     pub fn get_in<'a>(&'a self) -> &'a T {
+        // SAFETY: `in_ptr` points to a valid `T`, and is valid for reads.
         unsafe { &*self.in_ptr }
     }
 
     /// Get mutable reference to the output value.
     #[inline(always)]
     pub fn get_out<'a>(&'a mut self) -> &'a mut T {
+        // SAFETY: `out_ptr` points to a valid `T`, and is valid for reads and
+        // writes.
         unsafe { &mut *self.out_ptr }
     }
 
@@ -43,20 +48,21 @@ impl<'inp, 'out, T> InOut<'inp, 'out, T> {
     ///
     /// # Safety
     /// Behavior is undefined if any of the following conditions are violated:
-    /// - `in_ptr` must point to a properly initialized value of type `T` and
-    /// must be valid for reads.
-    /// - `out_ptr` must point to a properly initialized value of type `T` and
-    /// must be valid for both reads and writes.
+    /// - `in_ptr` must be non-null, must point to a properly initialized value
+    /// of type `T`, and must be valid for reads.
+    /// - `out_ptr` must be non-null, must point to a properly initialized value
+    /// of type `T`, and must be valid for both reads and writes.
     /// - `in_ptr` and `out_ptr` must be either equal or non-overlapping.
-    /// - If `in_ptr` and `out_ptr` are equal, then the memory referenced by
-    /// them must not be accessed through any other pointer (not derived from
-    /// the return value) for the duration of lifetime 'a. Both read and write
-    /// accesses are forbidden.
+    /// - If `in_ptr` and `out_ptr` are equal, then they must point to the same
+    /// allocated object, and the memory referenced by them must not be accessed
+    /// through any other pointer (not derived from the return value) for the
+    /// duration of lifetime 'a. Both read and write accesses are forbidden.
     /// - If `in_ptr` and `out_ptr` are not equal, then the memory referenced by
-    /// `out_ptr` must not be accessed through any other pointer (not derived from
-    /// the return value) for the duration of lifetime `'a`. Both read and write
-    /// accesses are forbidden. The memory referenced by `in_ptr` must not be
-    /// mutated for the duration of lifetime `'a`, except inside an `UnsafeCell`.
+    /// `out_ptr` must not be accessed through any other pointer (not derived
+    /// from the return value) for the duration of lifetime `'a`. Both read and
+    /// write accesses are forbidden. The memory referenced by `in_ptr` must not
+    /// be mutated for the duration of lifetime `'a`, except if all references
+    /// to that memory treat it as one or more `UnsafeCell`s (including `T`).
     #[inline(always)]
     pub unsafe fn from_raw(in_ptr: *const T, out_ptr: *mut T) -> InOut<'inp, 'out, T> {
         Self {
@@ -71,7 +77,7 @@ impl<'inp, 'out, T: Clone> InOut<'inp, 'out, T> {
     /// Clone input value and return it.
     #[inline(always)]
     pub fn clone_in(&self) -> T {
-        unsafe { (&*self.in_ptr).clone() }
+        self.get_in().clone()
     }
 }
 
@@ -106,24 +112,20 @@ impl<'inp, 'out, T, N: ArrayLength<T>> InOut<'inp, 'out, GenericArray<T, N>> {
     #[inline(always)]
     pub fn get<'a>(&'a mut self, pos: usize) -> InOut<'a, 'a, T> {
         assert!(pos < N::USIZE);
+        // SAFETY: TODO
         unsafe {
-            InOut {
-                in_ptr: (self.in_ptr as *const T).add(pos),
-                out_ptr: (self.out_ptr as *mut T).add(pos),
-                _pd: PhantomData,
-            }
+            InOut::from_raw(
+                (self.in_ptr as *const T).add(pos),
+                (self.out_ptr as *mut T).add(pos),
+            )
         }
     }
 
     /// Convert `InOut` array to `InOutBuf`.
     #[inline(always)]
     pub fn into_buf(self) -> InOutBuf<'inp, 'out, T> {
-        InOutBuf {
-            in_ptr: self.in_ptr as *const T,
-            out_ptr: self.out_ptr as *mut T,
-            len: N::USIZE,
-            _pd: PhantomData,
-        }
+        // SAFETY: TODO
+        unsafe { InOutBuf::from_raw(self.in_ptr as *const T, self.out_ptr as *mut T, N::USIZE) }
     }
 }
 
@@ -136,6 +138,7 @@ impl<'inp, 'out, N: ArrayLength<u8>> InOut<'inp, 'out, GenericArray<u8, N>> {
     #[inline(always)]
     #[allow(clippy::needless_range_loop)]
     pub fn xor_in2out(&mut self, data: &GenericArray<u8, N>) {
+        // SAFETY: TODO
         unsafe {
             let input = ptr::read(self.in_ptr);
             let mut temp = GenericArray::<u8, N>::default();
@@ -160,6 +163,7 @@ where
     #[inline(always)]
     #[allow(clippy::needless_range_loop)]
     pub fn xor_in2out(&mut self, data: &GenericArray<GenericArray<u8, N>, M>) {
+        // SAFETY: TODO
         unsafe {
             let input = ptr::read(self.in_ptr);
             let mut temp = GenericArray::<GenericArray<u8, N>, M>::default();
